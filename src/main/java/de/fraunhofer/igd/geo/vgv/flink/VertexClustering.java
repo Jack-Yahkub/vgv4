@@ -50,7 +50,7 @@ public class VertexClustering {
         // set up execution environment
         ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 
-        // TODO
+        // Zeilen als Strings lesen und vertex Zeilen in einem Tuple2<Character, Double[]> mit einem 'v' markieren, face Zeilen mit einem 'f', Kommentare mit einem 'c' und leere Zeilen mit einem 'e'. Daten werden als Double[3] gespeichert. setParallelism(1), um die Reihenfolge der vertices zu behalten, damit die Indizes spaeter stimmen.
 	DataSet<Tuple2<Character, Double[]>> object = env.readTextFile(inputFile).setParallelism(1)
 		.map(new MapFunction<String,Tuple2<Character,Double[]>>(){
 			@Override
@@ -71,6 +71,7 @@ public class VertexClustering {
 				}
 			}
 		}).setParallelism(1);
+	// Vertex Zeilen mit Indizes versehen und face Zeilen mit einer 0 markieren
 	DataSet<Tuple2<Integer, Double[]>> verticesAndFaces = object
 		.reduceGroup(new GroupReduceFunction<Tuple2<Character, Double[]>, Tuple2<Integer, Double[]>>() {
 			@Override
@@ -87,6 +88,7 @@ public class VertexClustering {
 				}
 			}
 		});
+	// Vertex Zeilen filtern und in eigenem DataSet abspeichern
 	DataSet<Tuple2<Integer, Double[]>> vertices = verticesAndFaces
 		.filter(new FilterFunction<Tuple2<Integer, Double[]>>() {
 			@Override
@@ -94,6 +96,7 @@ public class VertexClustering {
 				return data.f0 > 0;
 			} 
 		});
+	// Face Zeilen filtern und in eigenem DataSet abspeichern. Die Tuple Elemente beinhalten nun die drei Indizes.
 	DataSet<Tuple3<Integer, Integer, Integer>> faces = verticesAndFaces
 		.filter(new FilterFunction<Tuple2<Integer, Double[]>>() {
 			@Override
@@ -107,6 +110,7 @@ public class VertexClustering {
 				return new Tuple3<>(face.f1[0].intValue(), face.f1[1].intValue(), face.f1[2].intValue());
 			}
 		});
+	// Einteilung der Vertices in Zellen mithilfe 3D Morton Code
 	Configuration config = new Configuration();
 	config.setFloat("cellSize",cellSize);
 	DataSet<Tuple3<Double[], Integer, Integer>> vertex_medians = vertices
@@ -129,6 +133,7 @@ public class VertexClustering {
 			}
 		}).withParameters(config)
 		.groupBy(0)
+	// Berechnung der euklidischen Distanzen fuer jede Zelle und des Medians. Alte Vertex Koordinaten werden mit dem Median ueberschrieben und mit ihren alten Indizes und der 3D Morton Gruppen ID abgespeichert
 		.reduceGroup(new GroupReduceFunction<Tuple3<Long, Double[], Integer>, Tuple3<Double[], Integer, Long>>(){
 			@Override
 			public void reduce(Iterable<Tuple3<Long, Double[], Integer>> vertex, Collector<Tuple3<Double[], Integer, Long>> medianVertex) throws Exception {
@@ -166,6 +171,7 @@ public class VertexClustering {
 				}
 			}
 		})
+	// Erzeugung neuer Indizes fuer die in der vorigen GroupReduceFunction berechneten Mediane. 
 		.reduceGroup(new GroupReduceFunction<Tuple3<Double[], Integer, Long>, Tuple3<Double[], Integer, Integer>>() {
 			@Override
 			public void reduce(Iterable<Tuple3<Double[], Integer, Long>> medianVertices, Collector<Tuple3<Double[], Integer, Integer>> newIndVertices) throws Exception {
@@ -180,6 +186,7 @@ public class VertexClustering {
 				}
 			}
 		}).setParallelism(1); 
+	// Austauschen der alten Indizes im DataSet<...> faces durch die in der vorigen GroupReduceFunction erzeugten neuen Indizes
 	faces = faces
 		.join(vertex_medians)
 		.where("f0")
@@ -208,6 +215,7 @@ public class VertexClustering {
 				return new Tuple3<>(face.f0, face.f1, vertex.f2);
 			}
 		});
+	// Zusammenstellung der Strings der vertex Zeilen der Ausgabedatei
 	DataSet<String> vertex_Strings = vertex_medians
 		.groupBy(2)
 		.reduceGroup(new GroupReduceFunction<Tuple3<Double[], Integer, Integer>, String> () {
@@ -218,6 +226,7 @@ public class VertexClustering {
 				
 			}
 		}).setParallelism(1);
+	// Zusammenstellung der Strings der face Zeilen der Ausgabedatei
 	DataSet<String> face_Strings = faces
 		.reduceGroup(new GroupReduceFunction<Tuple3<Integer, Integer, Integer>, String> () {
 			@Override
@@ -227,13 +236,14 @@ public class VertexClustering {
 				}
 			}
 		}).setParallelism(1);
-
+	// Zusammenfuegen der vertex Zeilen und der face Zeilen und Abspeichern in Ausgabedatei
 	vertex_Strings
 	.union(face_Strings.distinct())
 	.writeAsText(outputFile,FileSystem.WriteMode.OVERWRITE).setParallelism(1);	
 	env.execute();
 	System.out.println("Done");
     }
+	// 2-Zero-Interleave Funktion. Beispiel: Aus abcd wird a00b00c00d 
         private static final long bitmasks[] = {0x249249249249L, 0xc30c30c30c3L, 0xf00f00f00fL, 0xfff00fffL};
         private static final long bitshifts[] = {0x2, 0x4, 0x8, 0x10};
         public static long zeroInterleaveBits(long bits){
